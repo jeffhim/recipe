@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8" />
+  <title>食譜 App</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#2e7d32">
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+
+  <style>
+    body { font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; margin:0; background:#f5f5f5; }
+    header { background:#2e7d32; color:white; padding:10px; display:flex; align-items:center; gap:10px; }
+    header h1 { flex:1; margin:0; }
+    main { padding:10px; }
+    section { background:white; margin-bottom:10px; padding:10px; border-radius:8px; }
+    button { padding:6px 10px; border:none; border-radius:4px; background:#388e3c; color:white; cursor:pointer; }
+    button:hover { background:#2e7d32; }
+    input, select, textarea { width:100%; box-sizing:border-box; margin-top:4px; margin-bottom:8px; padding:6px; }
+    ul { list-style:none; padding-left:0; }
+    li { margin-bottom:8px; }
+    img.recipe-photo { max-width:100%; border-radius:6px; margin-top:4px; }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>食譜管理</h1>
+    <button id="googleSignInBtn">Google 登入</button>
+    <button id="signOutBtn" style="display:none;">登出</button>
+    <span id="userInfo"></span>
+  </header>
+
+  <main>
+    <section>
+      <h2>菜系</h2>
+      <select id="cuisineSelect"></select>
+      <input type="text" id="newCuisineName" placeholder="新增菜系名稱">
+      <button id="addCuisineBtn">新增菜系</button>
+    </section>
+
+    <section>
+      <h2>食物類別</h2>
+      <select id="foodTypeSelect"></select>
+      <input type="text" id="newFoodTypeName" placeholder="新增食物類別">
+      <button id="addFoodTypeBtn">新增食物類別</button>
+    </section>
+
+    <section>
+      <h2>食譜列表</h2>
+      <ul id="recipeList"></ul>
+    </section>
+
+    <section>
+      <h2>新增 / 編輯 食譜</h2>
+      <form id="recipeForm">
+        <input type="hidden" id="recipeId">
+
+        <label>食譜名稱：</label>
+        <input type="text" id="recipeName" required>
+
+        <label>食材：</label>
+        <textarea id="ingredients" rows="4"></textarea>
+
+        <label>調味料：</label>
+        <textarea id="seasonings" rows="4"></textarea>
+
+        <label>醃料：</label>
+        <textarea id="marinades" rows="4"></textarea>
+
+        <label>煮食方法：</label>
+        <textarea id="method" rows="6"
+          placeholder="1. 步驟一&#10;2. 步驟二&#10;3. 步驟三"></textarea>
+
+        <label>食譜相片：</label>
+        <input type="file" id="photoInput" accept="image/*">
+
+        <button type="submit">儲存食譜</button>
+        <button type="button" id="clearFormBtn">清除表單</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
+
+  <script>
+    // ===== Firebase config（你要換） =====
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+
+    // ===== DOM =====
+    const googleSignInBtn = document.getElementById('googleSignInBtn');
+    const signOutBtn = document.getElementById('signOutBtn');
+    const userInfo = document.getElementById('userInfo');
+
+    const cuisineSelect = document.getElementById('cuisineSelect');
+    const newCuisineName = document.getElementById('newCuisineName');
+    const addCuisineBtn = document.getElementById('addCuisineBtn');
+
+    const foodTypeSelect = document.getElementById('foodTypeSelect');
+    const newFoodTypeName = document.getElementById('newFoodTypeName');
+    const addFoodTypeBtn = document.getElementById('addFoodTypeBtn');
+
+    const recipeList = document.getElementById('recipeList');
+
+    const recipeForm = document.getElementById('recipeForm');
+    const recipeIdInput = document.getElementById('recipeId');
+    const recipeNameInput = document.getElementById('recipeName');
+    const ingredientsInput = document.getElementById('ingredients');
+    const seasoningsInput = document.getElementById('seasonings');
+    const marinadesInput = document.getElementById('marinades');
+    const methodInput = document.getElementById('method');
+    const photoInput = document.getElementById('photoInput');
+    const clearFormBtn = document.getElementById('clearFormBtn');
+
+    let currentUser = null;
+
+    // ===== Google 登入 =====
+    googleSignInBtn.addEventListener('click', async () => {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await auth.signInWithPopup(provider);
+    });
+
+    signOutBtn.addEventListener('click', () => auth.signOut());
+
+    auth.onAuthStateChanged(user => {
+      currentUser = user;
+      if (user) {
+        userInfo.textContent = `已登入：${user.displayName}`;
+        googleSignInBtn.style.display = 'none';
+        signOutBtn.style.display = 'inline-block';
+        loadCuisines();
+      } else {
+        userInfo.textContent = '未登入';
+        googleSignInBtn.style.display = 'inline-block';
+        signOutBtn.style.display = 'none';
+        cuisineSelect.innerHTML = '';
+        foodTypeSelect.innerHTML = '';
+        recipeList.innerHTML = '';
+      }
+    });
+
+    // ===== 菜系 =====
+    async function loadCuisines() {
+      const snapshot = await db.collection('cuisines').orderBy('name').get();
+      cuisineSelect.innerHTML = '';
+      snapshot.forEach(doc => {
+        const opt = document.createElement('option');
+        opt.value = doc.id;
+        opt.textContent = doc.data().name;
+        cuisineSelect.appendChild(opt);
+      });
+      if (cuisineSelect.value) loadFoodTypes(cuisineSelect.value);
+    }
+
+    addCuisineBtn.addEventListener('click', async () => {
+      const name = newCuisineName.value.trim();
+      if (!name) return;
+      await db.collection('cuisines').add({ name });
+      newCuisineName.value = '';
+      loadCuisines();
+    });
+
+    cuisineSelect.addEventListener('change', () => {
+      loadFoodTypes(cuisineSelect.value);
+    });
+
+    // ===== 食物類別 =====
+    async function loadFoodTypes(cuisineId) {
+      const snapshot = await db.collection('foodTypes')
+        .where('cuisineId', '==', cuisineId)
+        .orderBy('name')
+        .get();
+
+      foodTypeSelect.innerHTML = '';
+      snapshot.forEach(doc => {
+        const opt = document.createElement('option');
+        opt.value = doc.id;
+        opt.textContent = doc.data().name;
+        foodTypeSelect.appendChild(opt);
+      });
+
+      if (foodTypeSelect.value)
+        loadRecipes(cuisineId, foodTypeSelect.value);
+    }
+
+    addFoodTypeBtn.addEventListener('click', async () => {
+      const name = newFoodTypeName.value.trim();
+      const cuisineId = cuisineSelect.value;
+      if (!name || !cuisineId) return;
+      await db.collection('foodTypes').add({ name, cuisineId });
+      newFoodTypeName.value = '';
+      loadFoodTypes(cuisineId);
+    });
+
+    foodTypeSelect.addEventListener('change', () => {
+      loadRecipes(cuisineSelect.value, foodTypeSelect.value);
+    });
+
+    // ===== 食譜列表 =====
+    async function loadRecipes(cuisineId, foodTypeId) {
+      const snapshot = await db.collection('recipes')
+        .where('cuisineId', '==', cuisineId)
+        .where('foodTypeId', '==', foodTypeId)
+        .orderBy('name')
+        .get();
+
+      recipeList.innerHTML = '';
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <strong>${data.name}</strong><br>
+          ${data.photoUrl ? `<img class="recipe-photo" src="${data.photoUrl}">` : ''}
+          <button data-id="${doc.id}" class="editRecipeBtn">編輯</button>
+        `;
+        recipeList.appendChild(li);
+      });
+
+      document.querySelectorAll('.editRecipeBtn').forEach(btn => {
+        btn.addEventListener('click', () => loadRecipeToForm(btn.dataset.id));
+      });
+    }
+
+    async function loadRecipeToForm(id) {
+      const doc = await db.collection('recipes').doc(id).get();
+      if (!doc.exists) return;
+      const data = doc.data();
+
+      recipeIdInput.value = id;
+      recipeNameInput.value = data.name;
+      ingredientsInput.value = data.ingredients;
+      seasoningsInput.value = data.seasonings;
+      marinadesInput.value = data.marinades;
+      methodInput.value = data.method;
+    }
+
+    // ===== 儲存食譜 =====
+    recipeForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!currentUser) return alert('請先登入');
+
+      const cuisineId = cuisineSelect.value;
+      const foodTypeId = foodTypeSelect.value;
+
+      const recipeData = {
+        name: recipeNameInput.value.trim(),
+        ingredients: ingredientsInput.value,
+        seasonings: seasoningsInput.value,
+        marinades: marinadesInput.value,
+        method: methodInput.value,
+        cuisineId,
+        foodTypeId,
+        createdBy: currentUser.uid
+      };
+
+      if (photoInput.files[0]) {
+        const file = photoInput.files[0];
+        const ref = storage.ref().child(`recipes/${Date.now()}_${file.name}`);
+        const snap = await ref.put(file);
+        recipeData.photoUrl = await snap.ref.getDownloadURL();
+      }
+
+      const id = recipeIdInput.value;
+      if (id)
+        await db.collection('recipes').doc(id).update(recipeData);
+      else
+        await db.collection('recipes').add(recipeData);
+
+      alert('食譜已儲存');
+      clearForm();
+      loadRecipes(cuisineId, foodTypeId);
+    });
+
+    function clearForm() {
+      recipeIdInput.value = '';
+      recipeNameInput.value = '';
+      ingredientsInput.value = '';
+      seasoningsInput.value = '';
+      marinadesInput.value = '';
+      methodInput.value = '1. 步驟一\n2. 步驟二\n3. 步驟三';
+      photoInput.value = '';
+    }
+
+    clearFormBtn.addEventListener('click', clearForm);
+
+    // ===== PWA =====
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</body>
+</html>
